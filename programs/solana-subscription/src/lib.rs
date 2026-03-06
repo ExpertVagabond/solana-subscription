@@ -25,6 +25,9 @@ pub mod solana_subscription {
     }
 
     pub fn create_subscription(ctx: Context<CreateSubscription>, amount: u64, interval: i64) -> Result<()> {
+        require!(amount > 0, SubError::InvalidAmount);
+        require!(interval > 0, SubError::InvalidInterval);
+
         let sub = &mut ctx.accounts.subscription;
         sub.subscriber = ctx.accounts.subscriber.key();
         sub.merchant = ctx.accounts.merchant_account.key();
@@ -117,9 +120,11 @@ pub struct CreateSubscription<'info> {
 
 #[derive(Accounts)]
 pub struct Charge<'info> {
-    #[account(mut)]
+    #[account(mut, constraint = subscription.merchant == merchant_account.key() @ SubError::Unauthorized)]
     pub subscription: Account<'info, Subscription>,
+    #[account(has_one = authority @ SubError::Unauthorized)]
     pub merchant_account: Account<'info, MerchantAccount>,
+    pub authority: Signer<'info>,
     #[account(mut, constraint = subscriber_token_account.owner == subscription.subscriber,
         constraint = subscriber_token_account.mint == subscription.mint)]
     pub subscriber_token_account: Account<'info, TokenAccount>,
@@ -198,4 +203,8 @@ pub enum SubError {
     Overflow,
     #[msg("Unauthorized")]
     Unauthorized,
+    #[msg("Amount must be greater than zero")]
+    InvalidAmount,
+    #[msg("Interval must be greater than zero")]
+    InvalidInterval,
 }
