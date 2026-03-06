@@ -12,6 +12,15 @@ pub mod solana_subscription {
         m.authority = ctx.accounts.authority.key();
         m.treasury = ctx.accounts.treasury.key();
         m.bump = ctx.bumps.merchant_account;
+
+        emit!(PlanCreated {
+            plan: m.key(),
+            authority: m.authority,
+            mint: ctx.accounts.treasury.mint,
+            price: 0,
+            interval: 0,
+        });
+
         Ok(())
     }
 
@@ -25,6 +34,13 @@ pub mod solana_subscription {
         sub.next_charge_ts = Clock::get()?.unix_timestamp;
         sub.active = true;
         sub.bump = ctx.bumps.subscription;
+
+        emit!(SubscriptionCreated {
+            subscription: sub.key(),
+            subscriber: sub.subscriber,
+            plan: sub.merchant,
+        });
+
         Ok(())
     }
 
@@ -51,6 +67,14 @@ pub mod solana_subscription {
         ), sub.amount)?;
 
         sub.next_charge_ts = sub.next_charge_ts.checked_add(sub.interval).ok_or(SubError::Overflow)?;
+
+        emit!(PaymentCharged {
+            subscription: sub.key(),
+            subscriber: sub.subscriber,
+            amount: sub.amount,
+            next_charge_ts: sub.next_charge_ts,
+        });
+
         Ok(())
     }
 
@@ -58,6 +82,12 @@ pub mod solana_subscription {
         let sub = &mut ctx.accounts.subscription;
         require!(ctx.accounts.subscriber.key() == sub.subscriber, SubError::Unauthorized);
         sub.active = false;
+
+        emit!(SubscriptionCancelled {
+            subscription: sub.key(),
+            subscriber: sub.subscriber,
+        });
+
         Ok(())
     }
 }
@@ -124,6 +154,36 @@ pub struct Subscription {
     pub next_charge_ts: i64,
     pub active: bool,
     pub bump: u8,
+}
+
+#[event]
+pub struct PlanCreated {
+    pub plan: Pubkey,
+    pub authority: Pubkey,
+    pub mint: Pubkey,
+    pub price: u64,
+    pub interval: i64,
+}
+
+#[event]
+pub struct SubscriptionCreated {
+    pub subscription: Pubkey,
+    pub subscriber: Pubkey,
+    pub plan: Pubkey,
+}
+
+#[event]
+pub struct PaymentCharged {
+    pub subscription: Pubkey,
+    pub subscriber: Pubkey,
+    pub amount: u64,
+    pub next_charge_ts: i64,
+}
+
+#[event]
+pub struct SubscriptionCancelled {
+    pub subscription: Pubkey,
+    pub subscriber: Pubkey,
 }
 
 #[error_code]
