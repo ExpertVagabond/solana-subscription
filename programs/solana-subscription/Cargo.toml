@@ -23,6 +23,7 @@ custom-panic = []
 [dependencies]
 anchor-lang = "0.32.0"
 anchor-spl = "0.32.0"
+solana-treasury-vault = { path = "../../../solana-treasury-vault/programs/solana-treasury-vault", features = ["cpi"] }
 
 
 [lints.rust]

@@ -1,5 +1,8 @@
 use anchor_lang::prelude::*;
 use anchor_spl::token_interface::{Mint, TokenInterface, TokenAccount, TransferChecked, transfer_checked};
+use solana_treasury_vault::cpi::accounts::Deposit as TreasuryDepositAccounts;
+use solana_treasury_vault::cpi::deposit as treasury_deposit;
+use solana_treasury_vault::program::SolanaTreasuryVault;
 
 declare_id!("2nj3qrjoiPsxA6sn965UtJeLT5gD8mAFSqFZCsmJQUr2");
 
@@ -83,6 +86,59 @@ pub mod solana_subscription {
         Ok(())
     }
 
+    /// Charge subscription and deposit directly into a Treasury Vault via CPI.
+    pub fn charge_to_treasury(ctx: Context<ChargeTreasury>) -> Result<()> {
+        let sub = &mut ctx.accounts.subscription;
+        require!(sub.active, SubError::NotActive);
+        let now = Clock::get()?.unix_timestamp;
+        require!(now >= sub.next_charge_ts, SubError::ChargeNotDue);
+
+        let subscriber_key = sub.subscriber;
+        let merchant_key = sub.merchant;
+        let amount = sub.amount;
+        let bump = sub.bump;
+        let seeds: &[&[u8]] = &[b"subscription", subscriber_key.as_ref(), merchant_key.as_ref(), &[bump]];
+
+        // Transfer from subscriber to the merchant authority's intermediate token account
+        let decimals = ctx.accounts.mint.decimals;
+        transfer_checked(CpiContext::new_with_signer(
+            ctx.accounts.token_program.to_account_info(),
+            TransferChecked {
+                from: ctx.accounts.subscriber_token_account.to_account_info(),
+                to: ctx.accounts.depositor_token_account.to_account_info(),
+                authority: sub.to_account_info(),
+                mint: ctx.accounts.mint.to_account_info(),
+            },
+            &[seeds],
+        ), amount, decimals)?;
+
+        // CPI into treasury-vault deposit
+        let cpi_accounts = TreasuryDepositAccounts {
+            depositor: ctx.accounts.authority.to_account_info(),
+            treasury: ctx.accounts.treasury.to_account_info(),
+            mint: ctx.accounts.mint.to_account_info(),
+            vault: ctx.accounts.treasury_vault.to_account_info(),
+            depositor_token_account: ctx.accounts.depositor_token_account.to_account_info(),
+            token_program: ctx.accounts.token_program.to_account_info(),
+        };
+        treasury_deposit(
+            CpiContext::new(ctx.accounts.treasury_vault_program.to_account_info(), cpi_accounts),
+            amount,
+        )?;
+
+        sub.next_charge_ts = sub.next_charge_ts.checked_add(sub.interval).ok_or(SubError::Overflow)?;
+
+        emit!(TreasuryPaymentCharged {
+            subscription: sub.key(),
+            subscriber: sub.subscriber,
+            treasury: ctx.accounts.treasury.key(),
+            amount,
+            next_charge_ts: sub.next_charge_ts,
+        });
+
+        Ok(())
+    }
+
     pub fn cancel_subscription(ctx: Context<CancelSubscription>) -> Result<()> {
         let sub = &mut ctx.accounts.subscription;
         require!(ctx.accounts.subscriber.key() == sub.subscriber, SubError::Unauthorized);
@@ -135,6 +191,29 @@ pub struct Charge<'info> {
     #[account(mut, constraint = merchant_treasury.mint == subscription.mint)]
     pub merchant_treasury: InterfaceAccount<'info, TokenAccount>,
     pub token_program: Interface<'info, TokenInterface>,
+}
+
+#[derive(Accounts)]
+pub struct ChargeTreasury<'info> {
+    #[account(mut, constraint = subscription.merchant == merchant_account.key() @ SubError::Unauthorized)]
+    pub subscription: Account<'info, Subscription>,
+    #[account(has_one = authority @ SubError::Unauthorized)]
+    pub merchant_account: Account<'info, MerchantAccount>,
+    #[account(mut)]
+    pub authority: Signer<'info>,
+    #[account(address = subscription.mint)]
+    pub mint: InterfaceAccount<'info, Mint>,
+    #[account(mut, constraint = subscriber_token_account.owner == subscription.subscriber,
+        constraint = subscriber_token_account.mint == subscription.mint)]
+    pub subscriber_token_account: InterfaceAccount<'info, TokenAccount>,
+    #[account(mut, constraint = depositor_token_account.owner == authority.key(),
+        constraint = depositor_token_account.mint == subscription.mint)]
+    pub depositor_token_account: InterfaceAccount<'info, TokenAccount>,
+    pub treasury: Account<'info, solana_treasury_vault::Treasury>,
+    #[account(mut)]
+    pub treasury_vault: InterfaceAccount<'info, TokenAccount>,
+    pub token_program: Interface<'info, TokenInterface>,
+    pub treasury_vault_program: Program<'info, SolanaTreasuryVault>,
 }
 
 #[derive(Accounts)]
@@ -193,6 +272,15 @@ pub struct PaymentCharged {
 pub struct SubscriptionCancelled {
     pub subscription: Pubkey,
     pub subscriber: Pubkey,
+}
+
+#[event]
+pub struct TreasuryPaymentCharged {
+    pub subscription: Pubkey,
+    pub subscriber: Pubkey,
+    pub treasury: Pubkey,
+    pub amount: u64,
+    pub next_charge_ts: i64,
 }
 
 #[error_code]
