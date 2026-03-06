@@ -1,5 +1,5 @@
 use anchor_lang::prelude::*;
-use anchor_spl::token::{self, Mint, Token, TokenAccount, Transfer};
+use anchor_spl::token_interface::{Mint, TokenInterface, TokenAccount, TransferChecked, transfer_checked};
 
 declare_id!("2nj3qrjoiPsxA6sn965UtJeLT5gD8mAFSqFZCsmJQUr2");
 
@@ -59,15 +59,17 @@ pub mod solana_subscription {
         let bump = sub.bump;
         let seeds: &[&[u8]] = &[b"subscription", subscriber_key.as_ref(), merchant_key.as_ref(), &[bump]];
 
-        token::transfer(CpiContext::new_with_signer(
+        let decimals = ctx.accounts.mint.decimals;
+        transfer_checked(CpiContext::new_with_signer(
             ctx.accounts.token_program.to_account_info(),
-            Transfer {
+            TransferChecked {
                 from: ctx.accounts.subscriber_token_account.to_account_info(),
                 to: ctx.accounts.merchant_treasury.to_account_info(),
                 authority: sub.to_account_info(),
+                mint: ctx.accounts.mint.to_account_info(),
             },
             &[seeds],
-        ), sub.amount)?;
+        ), sub.amount, decimals)?;
 
         sub.next_charge_ts = sub.next_charge_ts.checked_add(sub.interval).ok_or(SubError::Overflow)?;
 
@@ -100,7 +102,7 @@ pub struct RegisterMerchant<'info> {
     #[account(init, payer = authority, space = 8 + MerchantAccount::INIT_SPACE,
         seeds = [b"merchant", authority.key().as_ref()], bump)]
     pub merchant_account: Account<'info, MerchantAccount>,
-    pub treasury: Account<'info, TokenAccount>,
+    pub treasury: InterfaceAccount<'info, TokenAccount>,
     #[account(mut)]
     pub authority: Signer<'info>,
     pub system_program: Program<'info, System>,
@@ -112,7 +114,7 @@ pub struct CreateSubscription<'info> {
         seeds = [b"subscription", subscriber.key().as_ref(), merchant_account.key().as_ref()], bump)]
     pub subscription: Account<'info, Subscription>,
     pub merchant_account: Account<'info, MerchantAccount>,
-    pub mint: Account<'info, Mint>,
+    pub mint: InterfaceAccount<'info, Mint>,
     #[account(mut)]
     pub subscriber: Signer<'info>,
     pub system_program: Program<'info, System>,
@@ -125,12 +127,14 @@ pub struct Charge<'info> {
     #[account(has_one = authority @ SubError::Unauthorized)]
     pub merchant_account: Account<'info, MerchantAccount>,
     pub authority: Signer<'info>,
+    #[account(address = subscription.mint)]
+    pub mint: InterfaceAccount<'info, Mint>,
     #[account(mut, constraint = subscriber_token_account.owner == subscription.subscriber,
         constraint = subscriber_token_account.mint == subscription.mint)]
-    pub subscriber_token_account: Account<'info, TokenAccount>,
+    pub subscriber_token_account: InterfaceAccount<'info, TokenAccount>,
     #[account(mut, constraint = merchant_treasury.mint == subscription.mint)]
-    pub merchant_treasury: Account<'info, TokenAccount>,
-    pub token_program: Program<'info, Token>,
+    pub merchant_treasury: InterfaceAccount<'info, TokenAccount>,
+    pub token_program: Interface<'info, TokenInterface>,
 }
 
 #[derive(Accounts)]
