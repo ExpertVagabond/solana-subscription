@@ -1,5 +1,7 @@
 use anchor_lang::prelude::*;
-use anchor_spl::token_interface::{Mint, TokenInterface, TokenAccount, TransferChecked, transfer_checked};
+use anchor_spl::token_interface::{
+    transfer_checked, Mint, TokenAccount, TokenInterface, TransferChecked,
+};
 use solana_treasury_vault::cpi::accounts::Deposit as TreasuryDepositAccounts;
 use solana_treasury_vault::cpi::deposit as treasury_deposit;
 use solana_treasury_vault::program::SolanaTreasuryVault;
@@ -27,7 +29,11 @@ pub mod solana_subscription {
         Ok(())
     }
 
-    pub fn create_subscription(ctx: Context<CreateSubscription>, amount: u64, interval: i64) -> Result<()> {
+    pub fn create_subscription(
+        ctx: Context<CreateSubscription>,
+        amount: u64,
+        interval: i64,
+    ) -> Result<()> {
         require!(amount > 0, SubError::InvalidAmount);
         require!(interval > 0, SubError::InvalidInterval);
 
@@ -55,26 +61,42 @@ pub mod solana_subscription {
         require!(sub.active, SubError::NotActive);
         let now = Clock::get()?.unix_timestamp;
         require!(now >= sub.next_charge_ts, SubError::ChargeNotDue);
-        require_keys_eq!(ctx.accounts.merchant_treasury.key(), ctx.accounts.merchant_account.treasury, SubError::InvalidTreasury);
+        require_keys_eq!(
+            ctx.accounts.merchant_treasury.key(),
+            ctx.accounts.merchant_account.treasury,
+            SubError::InvalidTreasury
+        );
 
         let subscriber_key = sub.subscriber;
         let merchant_key = sub.merchant;
         let bump = sub.bump;
-        let seeds: &[&[u8]] = &[b"subscription", subscriber_key.as_ref(), merchant_key.as_ref(), &[bump]];
+        let seeds: &[&[u8]] = &[
+            b"subscription",
+            subscriber_key.as_ref(),
+            merchant_key.as_ref(),
+            &[bump],
+        ];
 
         let decimals = ctx.accounts.mint.decimals;
-        transfer_checked(CpiContext::new_with_signer(
-            ctx.accounts.token_program.to_account_info(),
-            TransferChecked {
-                from: ctx.accounts.subscriber_token_account.to_account_info(),
-                to: ctx.accounts.merchant_treasury.to_account_info(),
-                authority: sub.to_account_info(),
-                mint: ctx.accounts.mint.to_account_info(),
-            },
-            &[seeds],
-        ), sub.amount, decimals)?;
+        transfer_checked(
+            CpiContext::new_with_signer(
+                ctx.accounts.token_program.to_account_info(),
+                TransferChecked {
+                    from: ctx.accounts.subscriber_token_account.to_account_info(),
+                    to: ctx.accounts.merchant_treasury.to_account_info(),
+                    authority: sub.to_account_info(),
+                    mint: ctx.accounts.mint.to_account_info(),
+                },
+                &[seeds],
+            ),
+            sub.amount,
+            decimals,
+        )?;
 
-        sub.next_charge_ts = sub.next_charge_ts.checked_add(sub.interval).ok_or(SubError::Overflow)?;
+        sub.next_charge_ts = sub
+            .next_charge_ts
+            .checked_add(sub.interval)
+            .ok_or(SubError::Overflow)?;
 
         emit!(PaymentCharged {
             subscription: sub.key(),
@@ -97,20 +119,29 @@ pub mod solana_subscription {
         let merchant_key = sub.merchant;
         let amount = sub.amount;
         let bump = sub.bump;
-        let seeds: &[&[u8]] = &[b"subscription", subscriber_key.as_ref(), merchant_key.as_ref(), &[bump]];
+        let seeds: &[&[u8]] = &[
+            b"subscription",
+            subscriber_key.as_ref(),
+            merchant_key.as_ref(),
+            &[bump],
+        ];
 
         // Transfer from subscriber to the merchant authority's intermediate token account
         let decimals = ctx.accounts.mint.decimals;
-        transfer_checked(CpiContext::new_with_signer(
-            ctx.accounts.token_program.to_account_info(),
-            TransferChecked {
-                from: ctx.accounts.subscriber_token_account.to_account_info(),
-                to: ctx.accounts.depositor_token_account.to_account_info(),
-                authority: sub.to_account_info(),
-                mint: ctx.accounts.mint.to_account_info(),
-            },
-            &[seeds],
-        ), amount, decimals)?;
+        transfer_checked(
+            CpiContext::new_with_signer(
+                ctx.accounts.token_program.to_account_info(),
+                TransferChecked {
+                    from: ctx.accounts.subscriber_token_account.to_account_info(),
+                    to: ctx.accounts.depositor_token_account.to_account_info(),
+                    authority: sub.to_account_info(),
+                    mint: ctx.accounts.mint.to_account_info(),
+                },
+                &[seeds],
+            ),
+            amount,
+            decimals,
+        )?;
 
         // CPI into treasury-vault deposit
         let cpi_accounts = TreasuryDepositAccounts {
@@ -122,11 +153,17 @@ pub mod solana_subscription {
             token_program: ctx.accounts.token_program.to_account_info(),
         };
         treasury_deposit(
-            CpiContext::new(ctx.accounts.treasury_vault_program.to_account_info(), cpi_accounts),
+            CpiContext::new(
+                ctx.accounts.treasury_vault_program.to_account_info(),
+                cpi_accounts,
+            ),
             amount,
         )?;
 
-        sub.next_charge_ts = sub.next_charge_ts.checked_add(sub.interval).ok_or(SubError::Overflow)?;
+        sub.next_charge_ts = sub
+            .next_charge_ts
+            .checked_add(sub.interval)
+            .ok_or(SubError::Overflow)?;
 
         emit!(TreasuryPaymentCharged {
             subscription: sub.key(),
@@ -141,7 +178,10 @@ pub mod solana_subscription {
 
     pub fn cancel_subscription(ctx: Context<CancelSubscription>) -> Result<()> {
         let sub = &mut ctx.accounts.subscription;
-        require!(ctx.accounts.subscriber.key() == sub.subscriber, SubError::Unauthorized);
+        require!(
+            ctx.accounts.subscriber.key() == sub.subscriber,
+            SubError::Unauthorized
+        );
         sub.active = false;
 
         emit!(SubscriptionCancelled {
